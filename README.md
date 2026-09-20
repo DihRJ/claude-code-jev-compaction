@@ -87,9 +87,39 @@ is **$5 / $25 per million tokens** (input / output) on Claude Opus 5 and
   writes no spend logs, so the savings stay a guess while the invoice does not.
 
 `ANTHROPIC_BASE_URL` on its own does **not** change the billing. The credential
-does. Keeping the subscription while still going through the gateway would
-require the proxy to forward Claude Code's OAuth, which this `master_key` setup
-does not do, so treat that as out of scope here.
+does.
+
+### Can you keep the subscription and still go through the gateway? Not here.
+
+On paper, yes. Anthropic's docs say that setting only `ANTHROPIC_BASE_URL`,
+with no gateway credential, leaves the saved claude.ai login as the active
+credential, so its limits and billing apply. LiteLLM even ships a tutorial for
+Claude Code Max subscriptions built on `forward_client_headers_to_llm_api:
+true`, which is supposed to forward the user's OAuth token upstream instead of
+substituting the proxy's own key.
+
+**It does not work on the route Claude Code actually uses.** Tested on LiteLLM
+`1.103.0rc1`:
+
+- `/status` reports it correctly: `Login method: Claude Max account` **and**
+  `Anthropic base URL: http://127.0.0.1:4000`. The client side is fine.
+- The request still fails at the proxy. With `forward_client_headers_to_llm_api:
+  true` and no `api_key` on the models, LiteLLM refuses before forwarding:
+  `Missing Anthropic API Key`.
+- Add a dummy `api_key` to get past that validation and LiteLLM sends the dummy
+  upstream instead of the client's OAuth token: `invalid x-api-key` from
+  Anthropic.
+
+Claude Code talks to `/v1/messages`, which LiteLLM serves through its
+`experimental_pass_through` Anthropic handler. Client-header forwarding does not
+reach it. If a later release fixes this, the config change is small: drop every
+`api_key` from `model_list`, drop `master_key`, add
+`forward_client_headers_to_llm_api: true`, and set only `ANTHROPIC_BASE_URL` on
+the client.
+
+**Until then the trade is real: gateway or subscription, not both.** Which
+means if you are on Pro or Max and were not paying for API usage anyway, this
+compaction saves input tokens that already cost you nothing.
 
 To go back to the subscription for one project, use `claudeoff` from
 `zshrc-snippet.sh`.
@@ -286,6 +316,19 @@ guardrail metrics. To measure the savings with real numbers, run with
 A `pip install -U litellm` without `--pre` reinstalls the stable version, which
 does not have the guardrail. The proxy starts up normally and the compaction
 simply stops happening.
+
+**Environment variables leak into the proxy through a side door**
+Two of them override your config without saying so, because LiteLLM reads them
+straight from the environment of the process you started it in. If you launch
+the proxy from a shell that sourced your `.zshrc`, they are there:
+
+- `LITELLM_MASTER_KEY` re-enables master-key auth even after you removed
+  `master_key` from `config.yaml`. Symptom: `400 No connected db.`
+- `ANTHROPIC_API_KEY` is used to call Anthropic even with no `api_key` on the
+  models, so it silently bills your API account. Symptom: `Your credit balance
+  is too low` while you believed you were on the subscription.
+
+Launch the proxy with `env -u VAR` for whichever one must not apply.
 
 ---
 
