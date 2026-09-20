@@ -1,58 +1,60 @@
-# Claude Code + Jev: compactação de contexto por relevância
+# Claude Code + Jev: relevance-based context compaction
 
-Tutorial prático para colocar um gateway LiteLLM entre o Claude Code e a API da
-Anthropic, usando o modelo **Jev** (TypeSafe AI) para apagar resultados de
-ferramenta que já não servem para a tarefa atual, antes que eles cheguem ao
-modelo caro.
+[Português](README.pt-BR.md) · **English**
 
-Escrito em português porque praticamente não existe material sobre isso em PT-BR.
+A practical guide to putting a LiteLLM gateway between Claude Code and the
+Anthropic API, using the **Jev** model (TypeSafe AI) to drop tool results that
+no longer serve the current task, before they reach the expensive model.
+
+Originally written in Portuguese, because almost no material on this exists in
+PT-BR. This English version is a full translation.
 
 ---
 
-## O problema
+## The problem
 
-Em sessão longa de agente, o histórico acumula resultados de ferramenta que já
-não servem para nada: um arquivo lido há dez turnos, uma busca que não deu em
-nada, um grep de um caminho abandonado.
+In a long agent session, the history piles up tool results that are no longer
+useful: a file read ten turns ago, a search that found nothing, a grep down a
+path you abandoned.
 
-Esse lixo continua sendo enviado como tokens de entrada em **toda** requisição
-seguinte. Você paga de novo, a cada turno, por informação morta.
+That dead weight keeps being sent as input tokens on **every** following
+request. You pay again, every turn, for information that is already spent.
 
-## A solução
+## The solution
 
-O Jev é um modelo que lê texto mas nunca escreve texto de volta. Ele recebe um
-estado e devolve decisões tipadas com probabilidade calibrada.
+Jev is a model that reads text but never writes text back. It takes a state and
+returns typed decisions with calibrated probability.
 
-Como guardrail do LiteLLM, ele avalia cada tool exchange concluído e responde uma
-pergunta binária: **isso ainda é necessário para completar a tarefa atual?**
+As a LiteLLM guardrail, it evaluates each completed tool exchange and answers a
+binary question: **is this still needed to finish the current task?**
 
-O que fica abaixo do limiar é substituído por um aviso de remoção. O corte é
-tudo ou nada por bloco: um resultado é mantido na íntegra ou apagado. Nada é
-resumido nem parafraseado, então o que sobrevive continua auditável.
+Anything below the threshold is replaced by a removal notice. The cut is all or
+nothing per block: a result is either kept in full or erased. Nothing is
+summarized or paraphrased, so whatever survives stays auditable.
 
 ```
-Claude Code  ->  LiteLLM (localhost:4000)  ->  API da Anthropic
+Claude Code  ->  LiteLLM (localhost:4000)  ->  Anthropic API
                        |
                        v
-                  API do Jev
-            (decide o que cortar)
+                   Jev API
+              (decides what to cut)
 ```
 
 ---
 
-## Pré-requisitos
+## Requirements
 
-- macOS ou Linux com Python 3.10 ou superior
-- Chave da API da Anthropic
-- Chave da TypeSafe AI (acesso ao Jev)
-- Claude Code instalado
+- macOS or Linux with Python 3.10 or newer
+- An Anthropic API key
+- A TypeSafe AI key (Jev access)
+- Claude Code installed
 
 ---
 
-## Passo 1: instalar o LiteLLM
+## Step 1: install LiteLLM
 
-> **Atenção:** o guardrail `typesafe` ainda não existe na versão estável.
-> O `--pre` é obrigatório.
+> **Heads up:** the `typesafe` guardrail is not in the stable release yet.
+> The `--pre` flag is mandatory.
 
 ```bash
 mkdir -p ~/litellm-jev && cd ~/litellm-jev
@@ -61,77 +63,77 @@ source .venv/bin/activate
 pip install --pre -U 'litellm[proxy]'
 ```
 
-Confirme que o guardrail veio junto:
+Confirm the guardrail came along:
 
 ```bash
 ls .venv/lib/python3.*/site-packages/litellm/proxy/guardrails/guardrail_hooks/ | grep -i typesafe
 ```
 
-Se não imprimir `typesafe`, tente o código mais recente do repositório:
+If it does not print `typesafe`, try the latest code from the repository:
 
 ```bash
 pip install -U 'litellm[proxy] @ git+https://github.com/BerriAI/litellm.git@main'
 ```
 
-## Passo 2: variáveis de ambiente
+## Step 2: environment variables
 
-Acrescente ao `~/.zshrc` (ou `~/.bashrc`):
+Add to your `~/.zshrc` (or `~/.bashrc`):
 
 ```bash
-export TYPESAFE_API_KEY="sua-chave-typesafe"
-export ANTHROPIC_API_KEY="sua-chave-anthropic"
-export LITELLM_MASTER_KEY="sk-gerada-abaixo"
+export TYPESAFE_API_KEY="your-typesafe-key"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+export LITELLM_MASTER_KEY="sk-generated-below"
 ```
 
-Para gerar a master key:
+To generate the master key:
 
 ```bash
 echo "sk-$(openssl rand -hex 24)"
 ```
 
-Depois:
+Then:
 
 ```bash
 source ~/.zshrc
 chmod 600 ~/.zshrc
 ```
 
-## Passo 3: config.yaml
+## Step 3: config.yaml
 
-Copie o `config.yaml.example` deste repositório para `~/litellm-jev/config.yaml`.
+Copy `config.yaml.example` from this repository to `~/litellm-jev/config.yaml`.
 
-> **Não use editores que convertem aspas retas em curvas** (TextEdit do macOS,
-> por exemplo). Isso quebra o YAML de forma silenciosa. Prefira `cat > arquivo`
-> com heredoc, VS Code ou nano.
+> **Do not use editors that turn straight quotes into curly ones** (macOS
+> TextEdit, for one). It breaks the YAML silently. Prefer `cat > file` with a
+> heredoc, VS Code, or nano.
 
-Pontos do arquivo que importam:
+What matters in that file:
 
-- `mode: pre_call` é obrigatório, porque o guardrail só transforma a entrada
-- `default_on: true` compacta toda requisição, sem opt-in
-- O bloco `model_name: "*"` captura qualquer modelo Anthropic, inclusive o
-  modelo de fundo do Claude Code e lançamentos futuros
-- `relevance_threshold: 0.2` é a nota de corte, ajustável depois
+- `mode: pre_call` is mandatory, because the guardrail only transforms the input
+- `default_on: true` compacts every request, no opt-in
+- The `model_name: "*"` block catches any Anthropic model, including Claude
+  Code's background model and future releases
+- `relevance_threshold: 0.2` is the cutoff, tune it later
 
-## Passo 4: subir o proxy
+## Step 4: start the proxy
 
-Primeira vez, em primeiro plano, para ver erros:
+First run in the foreground, so you can see errors:
 
 ```bash
 litellm --config ~/litellm-jev/config.yaml
 ```
 
-Procure na saída os modelos carregados e a linha
+Look for the loaded models in the output and the line
 `Uvicorn running on http://0.0.0.0:4000`.
 
-Para uso diário, copie as funções do `zshrc-snippet.sh` deste repositório.
-Depois, basta `jevup`.
+For daily use, copy the functions from `zshrc-snippet.sh` in this repository.
+After that, `jevup` is all you need.
 
-## Passo 5: apontar o Claude Code para o proxy
+## Step 5: point Claude Code at the proxy
 
-O `settings.json` global vale para todos os projetos, atuais e futuros.
+The global `settings.json` applies to every project, current and future.
 
-> **Se o arquivo já existir, faça backup e mescle.** Sobrescrever apaga
-> `permissions`, `hooks`, `enabledPlugins` e o resto da sua configuração.
+> **If the file already exists, back it up and merge.** Overwriting wipes
+> `permissions`, `hooks`, `enabledPlugins`, and the rest of your configuration.
 
 ```bash
 cp ~/.claude/settings.json ~/.claude/settings.json.bak 2>/dev/null
@@ -146,106 +148,108 @@ data["env"] = {
     "ANTHROPIC_AUTH_TOKEN": os.environ["LITELLM_MASTER_KEY"],
 }
 (p / "settings.json").write_text(json.dumps(data, indent=2, ensure_ascii=False))
-print("chaves preservadas:", list(data.keys()))
+print("preserved keys:", list(data.keys()))
 PY
 
 chmod 600 ~/.claude/settings.json
 ```
 
-## Passo 6: verificar
+## Step 6: verify
 
 ```bash
 curl -i -s http://0.0.0.0:4000/v1/messages \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"sonnet","max_tokens":5,"messages":[{"role":"user","content":"oi"}]}' \
+  -d '{"model":"sonnet","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}' \
   | grep -i "guardrail\|HTTP/"
 ```
 
-Esperado:
+Expected:
 
 ```
 HTTP/1.1 200 OK
 x-litellm-applied-guardrails: jev-compaction
 ```
 
-O `/v1/messages` é o endpoint que o Claude Code usa. Validar só o
-`/v1/chat/completions` não prova que funciona no fluxo real.
+`/v1/messages` is the endpoint Claude Code actually uses. Validating only
+`/v1/chat/completions` does not prove it works in the real flow.
 
-## Passo 7: usar
+## Step 7: use it
 
 ```bash
-cd ~/qualquer-projeto
+cd ~/any-project
 claude
 ```
 
-Nada muda no seu fluxo. A compactação é invisível.
+Nothing changes in your workflow. The compaction is invisible.
 
 ---
 
-## Armadilhas que custam tempo
+## Traps that cost time
 
 **`API Error: 400 No connected db.`**
-A mensagem é enganosa. Sem banco de dados, a master key é a única credencial
-aceita, e qualquer outra chave produz esse erro. Traduzindo: a chave que o
-cliente mandou não bate com a master key do proxy. Já existe PR no LiteLLM para
-trocar isso por um 401.
+The message is misleading. With no database, the master key is the only accepted
+credential, and any other key produces this error. Translated: the key the
+client sent does not match the proxy's master key. There is already a PR in
+LiteLLM to turn this into a 401.
 
-**Rotacionou a master key e continua dando erro**
-O proxy lê a master key apenas na inicialização. Reinicie depois de trocar.
+**You rotated the master key and it still fails**
+The proxy reads the master key only at startup. Restart it after changing.
 
 **`Detected a custom API key in your environment`**
-O Claude Code pergunta se deve usar o `ANTHROPIC_API_KEY` do ambiente. Responda
-**No**, senão ele pode falar direto com a Anthropic e ignorar o proxy. Se ainda
-assim ignorar:
+Claude Code asks whether it should use `ANTHROPIC_API_KEY` from the environment.
+Answer **No**, otherwise it may talk to Anthropic directly and bypass the proxy.
+If it still bypasses it:
 
 ```bash
 env -u ANTHROPIC_API_KEY claude
 ```
 
-**Conectores do claude.ai desabilitados**
-Esperado. Com `ANTHROPIC_BASE_URL` apontando para um gateway, a sessão opera em
-modo API Usage Billing e os conectores da conta claude.ai ficam indisponíveis.
-Para um projeto que precise deles:
+**claude.ai connectors disabled**
+Expected. With `ANTHROPIC_BASE_URL` pointing at a gateway, the session runs in
+API Usage Billing mode and your claude.ai account connectors are unavailable.
+For a project that needs them:
 
 ```bash
 env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN claude
 ```
 
-**Modelo com sufixo, como `opus[1m]`**
-O bloco curinga `model_name: "*"` do config resolve. Sem ele, qualquer modelo
-não declarado quebra.
+**A model with a suffix, like `opus[1m]`**
+The wildcard `model_name: "*"` block in the config handles it. Without it, any
+undeclared model breaks.
 
-**A Admin UI em `/ui` abre vazia**
-Ela depende de banco de dados. Sem Postgres, não há spend logs nem métricas de
-guardrail. Para medir a economia com números, rode com `DATABASE_URL` apontando
-para um Postgres.
+**The Admin UI at `/ui` opens empty**
+It depends on a database. With no Postgres there are no spend logs and no
+guardrail metrics. To measure the savings with real numbers, run with
+`DATABASE_URL` pointing at a Postgres.
 
-**Atualização futura quebra tudo em silêncio**
-Um `pip install -U litellm` sem `--pre` reinstala a versão estável, que não tem
-o guardrail. O proxy sobe normalmente e a compactação simplesmente não acontece.
+**A future update breaks everything silently**
+A `pip install -U litellm` without `--pre` reinstalls the stable version, which
+does not have the guardrail. The proxy starts up normally and the compaction
+simply stops happening.
 
 ---
 
-## Limitações honestas
+## Honest limitations
 
-- **Só age sobre tool exchanges concluídos.** Mensagens de sistema, a última
-  mensagem do usuário e o exchange mais recente nunca são tocados. Conversa
-  curta sem ferramentas não tem o que compactar.
-- **Não mede sozinho.** Sem banco de dados, não há como quantificar a economia.
-- **Falha aberta por padrão.** Se a TypeSafe estiver fora do ar, a requisição
-  passa sem compactar, com aviso no log. Para falhar fechado, use
+- **It only acts on completed tool exchanges.** System messages, the last user
+  message, and the most recent exchange are never touched. A short conversation
+  with no tool use has nothing to compact.
+- **It does not measure itself.** With no database, there is no way to quantify
+  the savings.
+- **It fails open by default.** If TypeSafe is down, the request goes through
+  uncompacted, with a warning in the log. To fail closed, use
   `unreachable_fallback: fail_closed`.
-- **Versão pre-release.** A integração ainda não chegou ao canal estável.
+- **Pre-release.** The integration has not reached the stable channel yet.
 
 ---
 
-## Referências
+## References
 
-- [Guardrail TypeSafe no LiteLLM](https://docs.litellm.ai/docs/proxy/guardrails/typesafe)
+- [TypeSafe guardrail in LiteLLM](https://docs.litellm.ai/docs/proxy/guardrails/typesafe)
 - [TypeSafe AI](https://typesafe.ai)
 
-## Licença
+## License
 
 MIT
