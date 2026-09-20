@@ -1,0 +1,54 @@
+# LiteLLM + Jev (TypeSafe AI)
+# Copie para ~/litellm-jev/config.yaml
+#
+# Use um editor que NAO converta aspas retas em curvas.
+# No macOS, o TextEdit quebra este arquivo silenciosamente.
+
+model_list:
+  # Apelidos nomeados: sao o que voce digita em /model dentro do Claude Code
+  - model_name: sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: opus
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Curinga: captura qualquer outro modelo Anthropic, incluindo o modelo
+  # de fundo do Claude Code, sufixos como opus[1m] e lancamentos futuros.
+  # Sem este bloco, qualquer modelo nao declarado quebra.
+  - model_name: "*"
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+guardrails:
+  - guardrail_name: jev-compaction
+    litellm_params:
+      guardrail: typesafe
+      # Obrigatorio: o guardrail so transforma a entrada da requisicao
+      mode: pre_call
+      api_key: os.environ/TYPESAFE_API_KEY
+      # true compacta toda requisicao. Sem isso, a compactacao fica
+      # opt-in por chave (exige banco) ou por requisicao.
+      default_on: true
+      optional_params:
+        # Nota de corte. Suba para cortar mais e economizar mais.
+        # Desca se notar o modelo pedindo de novo algo que ja tinha lido.
+        relevance_threshold: 0.2
+        # Descomente para falhar fechado em vez de passar sem compactar
+        # unreachable_fallback: fail_closed
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+# Opcional: para ter Admin UI, spend logs e metricas do guardrail,
+# rode um Postgres e exporte DATABASE_URL antes de subir o proxy.
+#
+#   docker run -d --name litellm-db \
+#     -e POSTGRES_PASSWORD=litellm -e POSTGRES_DB=litellm \
+#     -p 5432:5432 postgres:16
+#
+#   export DATABASE_URL="postgresql://postgres:litellm@localhost:5432/litellm"

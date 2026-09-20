@@ -1,0 +1,18 @@
+# Segredos e configuracao real
+.env
+.env.*
+!.env.example
+config.yaml
+!config.yaml.example
+
+# Logs
+*.log
+
+# Ambiente Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
