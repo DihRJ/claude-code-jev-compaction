@@ -1,6 +1,10 @@
 # LiteLLM + Jev (TypeSafe AI)
 # Copie para ~/litellm-jev/config.yaml
 #
+# COBRANCA: apontar o Claude Code para este proxy com credencial propria tira a
+# sessao da assinatura Pro/Max e passa a cobrar por token na conta da API, e o
+# Jev e uma segunda cobranca. Leia "Quem paga a conta" no README antes de subir.
+#
 # Use um editor que NAO converta aspas retas em curvas.
 # No macOS, o TextEdit quebra este arquivo silenciosamente.
 

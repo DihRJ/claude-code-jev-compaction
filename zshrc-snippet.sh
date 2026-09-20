@@ -28,7 +28,7 @@ jevlog() {
 # Confirma que o guardrail esta ativo nesta execucao do proxy.
 # Faz uma chamada real a API com max_tokens 5, entao tem custo minimo.
 jevcheck() {
-  curl -i -s http://0.0.0.0:4000/v1/messages \
+  curl -i -s http://127.0.0.1:4000/v1/messages \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
@@ -36,8 +36,9 @@ jevcheck() {
     | grep -qi "jev-compaction" && echo "Jev ativo" || echo "Jev INATIVO"
 }
 
-# Abre o Claude Code SEM o proxy, para quando precisar dos conectores
-# do claude.ai naquele projeto especifico.
+# Abre o Claude Code SEM o proxy: volta para a assinatura do claude.ai
+# (e para os conectores dela) naquele projeto especifico, em vez de
+# consumir creditos da API. Ver "Quem paga a conta" no README.
 claudeoff() {
   env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN claude "$@"
 }

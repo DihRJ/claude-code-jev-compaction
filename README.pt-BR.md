@@ -9,6 +9,12 @@ modelo caro.
 
 Escrito em português porque praticamente não existe material sobre isso em PT-BR.
 
+> [!WARNING]
+> **Este setup tira a sua sessão da assinatura Pro ou Max e passa a cobrar por
+> token na sua conta da API.** Se você usa Claude Code dentro da assinatura, ele
+> provavelmente vai **aumentar** o seu custo em vez de reduzir. Leia
+> [Quem paga a conta](#quem-paga-a-conta) antes do Passo 1.
+
 ---
 
 ## O problema
@@ -39,6 +45,54 @@ Claude Code  ->  LiteLLM (localhost:4000)  ->  API da Anthropic
                   API do Jev
             (decide o que cortar)
 ```
+
+---
+
+## Quem paga a conta
+
+O Passo 5 aponta o Claude Code para o gateway com uma credencial própria
+(`ANTHROPIC_AUTH_TOKEN`). A partir daí, **a assinatura do claude.ai deixa de ser
+usada naquela sessão**: a credencial substitui o login, os limites de uso do
+plano não valem mais e o consumo passa a ser cobrado por token de quem é dono da
+chave que o gateway encaminha, que aqui é a sua conta do Claude Console.
+
+A documentação da Anthropic diz isso textualmente:
+
+> While a gateway credential variable or `apiKeyHelper` is active, a developer's
+> claude.ai subscription isn't used: the credential replaces the subscription
+> login for that session, and the subscription's usage limits don't apply. That
+> traffic is billed per token to whoever owns the credential the gateway
+> forwards.
+>
+> ([Other LLM gateways](https://code.claude.com/docs/en/llm-gateway))
+
+Em [preço de tabela](https://platform.claude.com/docs/en/about-claude/pricing),
+são **US$ 5 / US$ 25 por milhão de tokens** (entrada / saída) no Claude Opus 5 e
+**US$ 2 / US$ 10** no Claude Sonnet 5.
+
+**O que isso significa na prática:**
+
+- **A economia cai na conta da API, nunca na assinatura.** Se hoje você roda o
+  Claude Code dentro do Pro ou do Max, este setup troca custo marginal zero por
+  cobrança por token. Cortar 30% de um número que antes era zero ainda é mais
+  que zero.
+- **O Jev é um segundo medidor.** Cada requisição que passa pelo guardrail é uma
+  chamada cobrada à TypeSafe, e ela lê o histórico inteiro para decidir o corte.
+  Some os dois antes de concluir que saiu barato.
+- **Ponha um teto antes de subir o proxy.** Defina um spend limit de workspace no
+  Claude Console
+  ([como](https://platform.claude.com/docs/en/build-with-claude/workspaces#workspace-limits)).
+  É a única proteção que não depende de você lembrar de conferir.
+- **Sem banco de dados você não mede nada.** Sem `DATABASE_URL` o proxy não grava
+  spend logs, então a economia continua no achismo enquanto a fatura não fica.
+
+`ANTHROPIC_BASE_URL` sozinho **não** troca a cobrança. Quem troca é a credencial.
+Manter a assinatura e ainda assim passar pelo gateway exigiria o proxy repassar o
+OAuth do Claude Code, o que este setup com `master_key` não faz, então trate isso
+como fora do escopo deste tutorial.
+
+Para voltar à assinatura em um projeto específico, use o `claudeoff` do
+`zshrc-snippet.sh`.
 
 ---
 
@@ -132,6 +186,10 @@ Depois, basta `jevup`.
 
 O `settings.json` global vale para todos os projetos, atuais e futuros.
 
+> **Este é o passo que troca a cobrança.** Depois dele, a sessão sai da
+> assinatura e passa a consumir créditos da API. Ver
+> [Quem paga a conta](#quem-paga-a-conta).
+
 > **Se o arquivo já existir, faça backup e mescle.** Sobrescrever apaga
 > `permissions`, `hooks`, `enabledPlugins` e o resto da sua configuração.
 
@@ -143,12 +201,11 @@ import json, pathlib, os
 p = pathlib.Path.home() / ".claude"
 bak = p / "settings.json.bak"
 data = json.loads(bak.read_text()) if bak.exists() else {}
-data["env"] = {
-    "ANTHROPIC_BASE_URL": "http://0.0.0.0:4000",
-    "ANTHROPIC_AUTH_TOKEN": os.environ["LITELLM_MASTER_KEY"],
-}
+env = data.setdefault("env", {})
+env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:4000"
+env["ANTHROPIC_AUTH_TOKEN"] = os.environ["LITELLM_MASTER_KEY"]
 (p / "settings.json").write_text(json.dumps(data, indent=2, ensure_ascii=False))
-print("chaves preservadas:", list(data.keys()))
+print("chaves preservadas:", list(data.keys()), "| env:", list(env))
 PY
 
 chmod 600 ~/.claude/settings.json
@@ -157,7 +214,7 @@ chmod 600 ~/.claude/settings.json
 ## Passo 6: verificar
 
 ```bash
-curl -i -s http://0.0.0.0:4000/v1/messages \
+curl -i -s http://127.0.0.1:4000/v1/messages \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
@@ -207,9 +264,10 @@ env -u ANTHROPIC_API_KEY claude
 ```
 
 **Conectores do claude.ai desabilitados**
-Esperado. Com `ANTHROPIC_BASE_URL` apontando para um gateway, a sessão opera em
-modo API Usage Billing e os conectores da conta claude.ai ficam indisponíveis.
-Para um projeto que precise deles:
+Esperado, e é o sintoma visível da troca descrita em
+[Quem paga a conta](#quem-paga-a-conta): a credencial do gateway substitui o
+login do claude.ai, então os conectores da conta ficam indisponíveis e a sessão
+passa a ser cobrada por token. Para um projeto que precise deles:
 
 ```bash
 env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN claude
@@ -239,6 +297,8 @@ o guardrail. O proxy sobe normalmente e a compactação simplesmente não aconte
 - **Falha aberta por padrão.** Se a TypeSafe estiver fora do ar, a requisição
   passa sem compactar, com aviso no log. Para falhar fechado, use
   `unreachable_fallback: fail_closed`.
+- **Não é de graça.** O setup troca a assinatura por cobrança por token e ainda
+  acrescenta a conta da TypeSafe. Ver [Quem paga a conta](#quem-paga-a-conta).
 - **Versão pre-release.** A integração ainda não chegou ao canal estável.
 
 ---

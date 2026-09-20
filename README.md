@@ -9,6 +9,12 @@ no longer serve the current task, before they reach the expensive model.
 Originally written in Portuguese, because almost no material on this exists in
 PT-BR. This English version is a full translation.
 
+> [!WARNING]
+> **This setup takes your session off the Pro or Max subscription and starts
+> billing per token against your API account.** If you use Claude Code inside a
+> subscription, it will likely **raise** your cost, not cut it. Read
+> [Who pays the bill](#who-pays-the-bill) before Step 1.
+
 ---
 
 ## The problem
@@ -39,6 +45,54 @@ Claude Code  ->  LiteLLM (localhost:4000)  ->  Anthropic API
                    Jev API
               (decides what to cut)
 ```
+
+---
+
+## Who pays the bill
+
+Step 5 points Claude Code at the gateway with its own credential
+(`ANTHROPIC_AUTH_TOKEN`). From that moment on, **your claude.ai subscription is
+no longer used in that session**: the credential replaces the login, the plan's
+usage limits no longer apply, and usage is billed per token to whoever owns the
+key the gateway forwards, which here is your Claude Console account.
+
+Anthropic's documentation says it outright:
+
+> While a gateway credential variable or `apiKeyHelper` is active, a developer's
+> claude.ai subscription isn't used: the credential replaces the subscription
+> login for that session, and the subscription's usage limits don't apply. That
+> traffic is billed per token to whoever owns the credential the gateway
+> forwards.
+>
+> ([Other LLM gateways](https://code.claude.com/docs/en/llm-gateway))
+
+At [list price](https://platform.claude.com/docs/en/about-claude/pricing), that
+is **$5 / $25 per million tokens** (input / output) on Claude Opus 5 and
+**$2 / $10** on Claude Sonnet 5.
+
+**What that means in practice:**
+
+- **The savings land on the API bill, never on the subscription.** If you run
+  Claude Code inside Pro or Max today, this setup trades zero marginal cost for
+  per-token billing. Cutting 30% off a number that used to be zero is still more
+  than zero.
+- **Jev is a second meter.** Every request that goes through the guardrail is a
+  billed call to TypeSafe, and it reads the whole history to decide what to cut.
+  Add both up before concluding it came out cheap.
+- **Set a ceiling before you start the proxy.** Set a workspace spend limit in
+  the Claude Console
+  ([how](https://platform.claude.com/docs/en/build-with-claude/workspaces#workspace-limits)).
+  It is the only protection that does not depend on you remembering to check.
+- **With no database you measure nothing.** Without `DATABASE_URL` the proxy
+  writes no spend logs, so the savings stay a guess while the invoice does not.
+
+`ANTHROPIC_BASE_URL` on its own does **not** change the billing. The credential
+does. Keeping the subscription while still going through the gateway would
+require the proxy to forward Claude Code's OAuth, which this `master_key` setup
+does not do, so treat that as out of scope here.
+
+To go back to the subscription for one project, use `claudeoff` from
+`zshrc-snippet.sh`.
 
 ---
 
@@ -132,6 +186,10 @@ After that, `jevup` is all you need.
 
 The global `settings.json` applies to every project, current and future.
 
+> **This is the step that switches the billing.** After it, the session leaves
+> the subscription and starts spending API credits. See
+> [Who pays the bill](#who-pays-the-bill).
+
 > **If the file already exists, back it up and merge.** Overwriting wipes
 > `permissions`, `hooks`, `enabledPlugins`, and the rest of your configuration.
 
@@ -143,12 +201,11 @@ import json, pathlib, os
 p = pathlib.Path.home() / ".claude"
 bak = p / "settings.json.bak"
 data = json.loads(bak.read_text()) if bak.exists() else {}
-data["env"] = {
-    "ANTHROPIC_BASE_URL": "http://0.0.0.0:4000",
-    "ANTHROPIC_AUTH_TOKEN": os.environ["LITELLM_MASTER_KEY"],
-}
+env = data.setdefault("env", {})
+env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:4000"
+env["ANTHROPIC_AUTH_TOKEN"] = os.environ["LITELLM_MASTER_KEY"]
 (p / "settings.json").write_text(json.dumps(data, indent=2, ensure_ascii=False))
-print("preserved keys:", list(data.keys()))
+print("preserved keys:", list(data.keys()), "| env:", list(env))
 PY
 
 chmod 600 ~/.claude/settings.json
@@ -157,7 +214,7 @@ chmod 600 ~/.claude/settings.json
 ## Step 6: verify
 
 ```bash
-curl -i -s http://0.0.0.0:4000/v1/messages \
+curl -i -s http://127.0.0.1:4000/v1/messages \
   -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
@@ -207,9 +264,10 @@ env -u ANTHROPIC_API_KEY claude
 ```
 
 **claude.ai connectors disabled**
-Expected. With `ANTHROPIC_BASE_URL` pointing at a gateway, the session runs in
-API Usage Billing mode and your claude.ai account connectors are unavailable.
-For a project that needs them:
+Expected, and it is the visible symptom of the switch described in
+[Who pays the bill](#who-pays-the-bill): the gateway credential replaces the
+claude.ai login, so the account connectors are unavailable and the session is
+billed per token. For a project that needs them:
 
 ```bash
 env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN claude
@@ -241,6 +299,8 @@ simply stops happening.
 - **It fails open by default.** If TypeSafe is down, the request goes through
   uncompacted, with a warning in the log. To fail closed, use
   `unreachable_fallback: fail_closed`.
+- **It is not free.** The setup trades the subscription for per-token billing
+  and adds the TypeSafe bill on top. See [Who pays the bill](#who-pays-the-bill).
 - **Pre-release.** The integration has not reached the stable channel yet.
 
 ---
