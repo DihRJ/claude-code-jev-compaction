@@ -89,37 +89,67 @@ is **$5 / $25 per million tokens** (input / output) on Claude Opus 5 and
 `ANTHROPIC_BASE_URL` on its own does **not** change the billing. The credential
 does.
 
-### Can you keep the subscription and still go through the gateway? Not here.
+### Keeping the subscription: one credential per header
 
-On paper, yes. Anthropic's docs say that setting only `ANTHROPIC_BASE_URL`,
-with no gateway credential, leaves the saved claude.ai login as the active
-credential, so its limits and billing apply. LiteLLM even ships a tutorial for
-Claude Code Max subscriptions built on `forward_client_headers_to_llm_api:
-true`, which is supposed to forward the user's OAuth token upstream instead of
-substituting the proxy's own key.
+**It works.** Claude Code sends its subscription OAuth token in `Authorization`,
+and LiteLLM forwards it upstream, so Anthropic bills the Claude Max or Pro plan.
+The catch is that the proxy also needs its own key to authenticate the caller,
+and `Authorization` holds only one credential. The proxy key goes in a separate
+header, `x-litellm-api-key`.
 
-**It does not work on the route Claude Code actually uses.** Tested on LiteLLM
-`1.103.0rc1`:
+Diagnosed in [BerriAI/litellm#42170](https://github.com/BerriAI/litellm/issues/42170);
+[#42219](https://github.com/BerriAI/litellm/pull/42219) makes the error say so.
+Tested on LiteLLM `1.103.0rc1`.
 
-- `/status` reports it correctly: `Login method: Claude Max account` **and**
-  `Anthropic base URL: http://127.0.0.1:4000`. The client side is fine.
-- The request still fails at the proxy. With `forward_client_headers_to_llm_api:
-  true` and no `api_key` on the models, LiteLLM refuses before forwarding:
-  `Missing Anthropic API Key`.
-- Add a dummy `api_key` to get past that validation and LiteLLM sends the dummy
-  upstream instead of the client's OAuth token: `invalid x-api-key` from
-  Anthropic.
+**Proxy config**, with no `api_key` on any model:
 
-Claude Code talks to `/v1/messages`, which LiteLLM serves through its
-`experimental_pass_through` Anthropic handler. Client-header forwarding does not
-reach it. If a later release fixes this, the config change is small: drop every
-`api_key` from `model_list`, drop `master_key`, add
-`forward_client_headers_to_llm_api: true`, and set only `ANTHROPIC_BASE_URL` on
-the client.
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: anthropic/*
 
-**Until then the trade is real: gateway or subscription, not both.** Which
-means if you are on Pro or Max and were not paying for API usage anyway, this
-compaction saves input tokens that already cost you nothing.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  forward_client_headers_to_llm_api: true
+```
+
+**Proxy environment.** `ANTHROPIC_API_KEY` must be absent, or LiteLLM uses it
+upstream and bypasses the subscription silently:
+
+```bash
+env -u ANTHROPIC_API_KEY litellm --config config.yaml
+```
+
+**Client side.** Only the base URL and the proxy key in its own header, with no
+credential of Claude Code's own:
+
+```bash
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+  ANTHROPIC_BASE_URL="http://127.0.0.1:4000" \
+  ANTHROPIC_CUSTOM_HEADERS="x-litellm-api-key: $LITELLM_MASTER_KEY" \
+  claude
+```
+
+**How to tell it worked.** `/status` shows `Login method: Claude Max account`
+together with `Anthropic base URL`, and the proxy log shows `POST /v1/messages`
+returning `200` with no `credit balance`, `invalid x-api-key` or
+`No connected db` errors. `/status` alone is not proof: it looked right in the
+broken setups too.
+
+**What changes in this mode:**
+
+- The plan's usage limits apply, not API spend. Expect the occasional `429` on
+  heavy models, which Claude Code retries.
+- Jev is still a separate meter billed by TypeSafe, at a fraction of a cent per
+  request.
+- Remote managed settings and organization policy are not fetched while a
+  custom `ANTHROPIC_BASE_URL` is set.
+
+**Why the earlier attempts failed.** Removing `master_key` to free
+`Authorization` left the proxy unable to authenticate the caller, and a
+`LITELLM_MASTER_KEY` or `ANTHROPIC_API_KEY` in the proxy's environment kept
+overriding the config. Both traps are listed below.
 
 To go back to the subscription for one project, use `claudeoff` from
 `zshrc-snippet.sh`.

@@ -88,37 +88,67 @@ são **US$ 5 / US$ 25 por milhão de tokens** (entrada / saída) no Claude Opus 
 
 `ANTHROPIC_BASE_URL` sozinho **não** troca a cobrança. Quem troca é a credencial.
 
-### Dá para manter a assinatura e ainda passar pelo gateway? Aqui, não.
+### Mantendo a assinatura: uma credencial por header
 
-No papel, sim. A documentação da Anthropic diz que definir apenas
-`ANTHROPIC_BASE_URL`, sem credencial de gateway, mantém o login salvo do
-claude.ai como credencial ativa, então valem os limites e a cobrança dele. O
-LiteLLM tem até um tutorial para assinaturas Claude Code Max baseado em
-`forward_client_headers_to_llm_api: true`, que deveria encaminhar o token OAuth
-do usuário em vez de substituir pela chave do proxy.
+**Funciona.** O Claude Code envia o token OAuth da assinatura em `Authorization`,
+e o LiteLLM o encaminha adiante, então a Anthropic cobra do plano Claude Max ou
+Pro. O detalhe é que o proxy também precisa de uma chave própria para
+autenticar quem chama, e o `Authorization` comporta uma credencial só. A chave
+do proxy vai num header separado, `x-litellm-api-key`.
 
-**Não funciona na rota que o Claude Code usa de verdade.** Testado no LiteLLM
-`1.103.0rc1`:
+Diagnosticado em [BerriAI/litellm#42170](https://github.com/BerriAI/litellm/issues/42170);
+o [#42219](https://github.com/BerriAI/litellm/pull/42219) faz a mensagem de erro
+dizer isso. Testado no LiteLLM `1.103.0rc1`.
 
-- O `/status` reporta certo: `Login method: Claude Max account` **e**
-  `Anthropic base URL: http://127.0.0.1:4000`. O lado do cliente está correto.
-- A requisição falha no proxy. Com `forward_client_headers_to_llm_api: true` e
-  sem `api_key` nos modelos, o LiteLLM recusa antes de encaminhar:
-  `Missing Anthropic API Key`.
-- Colocando um `api_key` falso para passar dessa validação, o LiteLLM envia a
-  chave falsa em vez do token OAuth do cliente: `invalid x-api-key`, da
-  Anthropic.
+**Config do proxy**, sem `api_key` em nenhum modelo:
 
-O Claude Code fala com `/v1/messages`, que o LiteLLM serve pelo handler
-`experimental_pass_through` da Anthropic. O encaminhamento de headers do cliente
-não chega ali. Se uma versão futura corrigir isso, a mudança de config é
-pequena: remover todo `api_key` do `model_list`, remover a `master_key`,
-acrescentar `forward_client_headers_to_llm_api: true` e definir apenas
-`ANTHROPIC_BASE_URL` no cliente.
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: anthropic/*
 
-**Até lá a troca é real: gateway ou assinatura, não os dois.** O que significa
-que, se você está no Pro ou no Max e não pagava por uso de API de qualquer
-forma, esta compactação economiza tokens de entrada que já não te custavam nada.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  forward_client_headers_to_llm_api: true
+```
+
+**Ambiente do proxy.** O `ANTHROPIC_API_KEY` precisa estar ausente, senão o
+LiteLLM o usa na chamada à Anthropic e ignora a assinatura em silêncio:
+
+```bash
+env -u ANTHROPIC_API_KEY litellm --config config.yaml
+```
+
+**Lado do cliente.** Só o base URL e a chave do proxy no header dela, sem
+nenhuma credencial própria do Claude Code:
+
+```bash
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
+  ANTHROPIC_BASE_URL="http://127.0.0.1:4000" \
+  ANTHROPIC_CUSTOM_HEADERS="x-litellm-api-key: $LITELLM_MASTER_KEY" \
+  claude
+```
+
+**Como saber que funcionou.** O `/status` mostra `Login method: Claude Max
+account` junto com o `Anthropic base URL`, e o log do proxy mostra
+`POST /v1/messages` voltando `200`, sem erros de `credit balance`,
+`invalid x-api-key` ou `No connected db`. O `/status` sozinho não prova nada:
+ele parecia certo também nas configurações quebradas.
+
+**O que muda neste modo:**
+
+- Valem os limites de uso do plano, não gasto de API. Espere um `429` ocasional
+  em modelos pesados, que o Claude Code repete.
+- O Jev continua sendo um medidor separado, cobrado pela TypeSafe, a frações de
+  centavo por requisição.
+- Configurações gerenciadas remotas e política da organização não são buscadas
+  enquanto houver `ANTHROPIC_BASE_URL` customizado.
+
+**Por que as tentativas anteriores falharam.** Remover a `master_key` para
+liberar o `Authorization` deixou o proxy sem como autenticar quem chama, e um
+`LITELLM_MASTER_KEY` ou `ANTHROPIC_API_KEY` no ambiente do proxy seguia
+sobrepondo o config. As duas armadilhas estão listadas abaixo.
 
 Para voltar à assinatura em um projeto específico, use o `claudeoff` do
 `zshrc-snippet.sh`.
